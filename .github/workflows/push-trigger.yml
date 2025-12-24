@@ -1,14 +1,8 @@
 name: Maven Package upon a push
 
 on:
-  push:
-    branches:
-      - master
-      - 1.*
-      - develop
-      - MOSIP*
-      - release*
-      - ES-842
+  release:
+    types: [published]
   pull_request:
     types: [opened, reopened, synchronize]
   workflow_dispatch:
@@ -18,46 +12,18 @@ on:
         required: false
         default: 'Triggered for Updates'
         type: string
-  release:
-    types: [published]
-      
-       
-jobs:
-  detect_changes:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    outputs:
-      ui_changed: ${{ steps.filter.outputs.ui }}
-      service_changed: ${{ steps.filter.outputs.service }}
-      automation_changed: ${{ steps.filter.outputs.automation }}
+  push:
+    branches:
+      - '!release-branch'
+      - master
+      - 1.*
+      - develop
+      - MOSIP*
+      - release*
+      - ES-842
 
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Detect changes by directory
-        id: filter
-        uses: dorny/paths-filter@v3
-        with:
-          base: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
-          filters: |
-            ui:
-              - 'oidc-ui/**'
-            service:
-              - 'esignet-with-plugins/**'
-              - 'esignet-service/**'
-              - 'esignet-core/**'
-              - 'esignet-integration-api/**'
-            automation:
-              - 'ui-test/**'
-              - 'api-test/**'   
+jobs:
   build_maven_esignet:
-    needs: detect_changes
-    if: >
-      github.event_name == 'push' ||
-      (github.event_name == 'pull_request' &&
-       (startsWith(github.base_ref, 'release') ||
-        needs.detect_changes.outputs.service_changed == 'true'))
     uses: mosip/kattu/.github/workflows/maven-build.yml@master
     with:
       SERVICE_LOCATION: ./
@@ -68,37 +34,8 @@ jobs:
       OSSRH_TOKEN: ${{ secrets.OSSRH_TOKEN }}
       GPG_SECRET: ${{ secrets.GPG_SECRET }}
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
-
-  build_dockers:
-    needs: build_maven_esignet
-    strategy:
-      matrix:
-        include:
-          - SERVICE_LOCATION: 'esignet-service'
-            SERVICE_NAME: 'esignet'
-            BUILD_ARTIFACT: 'esignet'
-            SQUASH_LAYERS: '14'
-      fail-fast: false
-    name: esignet / build-dockers
-    uses: mosip/kattu/.github/workflows/docker-build.yml@master
-    with:
-      SERVICE_LOCATION: ${{ matrix.SERVICE_LOCATION }}
-      SERVICE_NAME: ${{ matrix.SERVICE_NAME }}
-      BUILD_ARTIFACT: ${{ matrix.BUILD_ARTIFACT }}
-      SQUASH_LAYERS: ${{ matrix.SQUASH_LAYERS }}
-    secrets:
-      DEV_NAMESPACE_DOCKER_HUB: ${{ secrets.DEV_NAMESPACE_DOCKER_HUB }}
-      ACTOR_DOCKER_HUB: ${{ secrets.ACTOR_DOCKER_HUB }}
-      RELEASE_DOCKER_HUB: ${{ secrets.RELEASE_DOCKER_HUB }}
-      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}    
       
   build-oidc-ui:
-    needs: detect_changes
-    if: >
-      github.event_name == 'push' ||
-      (github.event_name == 'pull_request' &&
-       (startsWith(github.base_ref, 'release') ||
-        needs.detect_changes.outputs.ui_changed == 'true'))
     uses: mosip/kattu/.github/workflows/npm-build.yml@develop
     with:
       SERVICE_LOCATION: oidc-ui
@@ -170,13 +107,13 @@ jobs:
   publish_to_nexus:
     if: "${{ !contains(github.ref, 'master') && github.event_name != 'pull_request' }}"
     needs: build_maven_esignet
-    uses: mosip/kattu/.github/workflows/maven-publish-to-nexus.yml@master-java21
+    uses: mosip/kattu/.github/workflows/maven-publish-to-nexus.yml@master
     with:
       SERVICE_LOCATION: ./
     secrets:
       OSSRH_USER: ${{ secrets.OSSRH_USER }}
       OSSRH_SECRET: ${{ secrets.OSSRH_SECRET }}
-      OSSRH_URL: ${{ secrets.OSSRH_SNAPSHOT_URL }}
+      OSSRH_URL: ${{ secrets.OSSRH_CENTRAL_URL }}
       OSSRH_TOKEN: ${{ secrets.OSSRH_TOKEN }}
       GPG_SECRET: ${{ secrets.GPG_SECRET }}
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
@@ -184,7 +121,7 @@ jobs:
   sonar_analysis:
     needs: build_maven_esignet
     if: "${{  github.event_name != 'pull_request' }}"
-    uses: mosip/kattu/.github/workflows/maven-sonar-analysis.yml@master-java21
+    uses: mosip/kattu/.github/workflows/maven-sonar-analysis.yml@master
     with:
       SERVICE_LOCATION: ./
     secrets:
@@ -208,13 +145,30 @@ jobs:
       ORG_KEY: ${{ secrets.ORG_KEY }}
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
 
+  build_dockers:
+    needs: build_maven_esignet
+    strategy:
+      matrix:
+        include:
+          - SERVICE_LOCATION: 'esignet-service'
+            SERVICE_NAME: 'esignet'
+            BUILD_ARTIFACT: 'esignet'
+            SQUASH_LAYERS: '14'
+      fail-fast: false
+    name: ${{ matrix.SERVICE_NAME }}
+    uses: mosip/kattu/.github/workflows/docker-build.yml@master
+    with:
+      SERVICE_LOCATION: ${{ matrix.SERVICE_LOCATION }}
+      SERVICE_NAME: ${{ matrix.SERVICE_NAME }}
+      BUILD_ARTIFACT: ${{ matrix.BUILD_ARTIFACT }}
+      SQUASH_LAYERS: ${{ matrix.SQUASH_LAYERS }}
+    secrets:
+      DEV_NAMESPACE_DOCKER_HUB: ${{ secrets.DEV_NAMESPACE_DOCKER_HUB }}
+      ACTOR_DOCKER_HUB: ${{ secrets.ACTOR_DOCKER_HUB }}
+      RELEASE_DOCKER_HUB: ${{ secrets.RELEASE_DOCKER_HUB }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+
   build_maven_esignet_with_plugins:
-    needs: detect_changes
-    if: >
-      github.event_name == 'push' ||
-      (github.event_name == 'pull_request' &&
-       (startsWith(github.base_ref, 'release') ||
-        needs.detect_changes.outputs.service_changed == 'true'))
     uses: mosip/kattu/.github/workflows/maven-build.yml@master
     with:
       SERVICE_LOCATION: ./esignet-with-plugins
@@ -238,7 +192,7 @@ jobs:
             BUILD_ARTIFACT: 'esignet-with-plugins'
       fail-fast: false
     name: ${{ matrix.SERVICE_NAME }}
-    uses: mosip/kattu/.github/workflows/docker-build.yml@master-java21
+    uses: mosip/kattu/.github/workflows/docker-build.yml@master
     with:
       SERVICE_LOCATION: ${{ matrix.SERVICE_LOCATION }}
       SERVICE_NAME: ${{ matrix.SERVICE_NAME }}
@@ -250,11 +204,6 @@ jobs:
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
 
   build_dockers_oidc_ui:
-    needs: build-oidc-ui
-    if: >
-      github.event_name == 'push' ||
-      (github.event_name == 'pull_request' &&
-       needs.detect_changes.outputs.ui_changed == 'true')
     strategy:
       matrix:
         include:
@@ -262,7 +211,7 @@ jobs:
             SERVICE_NAME: 'oidc-ui'
             SQUASH_LAYERS: '13'
       fail-fast: false
-    name: oidc-ui / build-dockers
+    name: ${{ matrix.SERVICE_NAME }}
     uses: mosip/kattu/.github/workflows/docker-build.yml@master
     with:
       SERVICE_LOCATION: ${{ matrix.SERVICE_LOCATION }}
@@ -275,12 +224,6 @@ jobs:
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
 
   build_maven_apitest_esignet:
-    needs: detect_changes
-    if: >
-      github.event_name == 'push' ||
-      (github.event_name == 'pull_request' &&
-       (startsWith(github.base_ref, 'release') ||
-        needs.detect_changes.outputs.automation_changed == 'true'))
     uses: mosip/kattu/.github/workflows/maven-build.yml@master-java21
     with:
       SERVICE_LOCATION: ./api-test
@@ -301,7 +244,7 @@ jobs:
     secrets:
       OSSRH_USER: ${{ secrets.OSSRH_USER }}
       OSSRH_SECRET: ${{ secrets.OSSRH_SECRET }}
-      OSSRH_URL: ${{ secrets.OSSRH_SNAPSHOT_URL }}
+      OSSRH_URL: ${{ secrets.OSSRH_CENTRAL_URL }}
       OSSRH_TOKEN: ${{ secrets.OSSRH_TOKEN }}
       GPG_SECRET: ${{ secrets.GPG_SECRET }}
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
@@ -353,11 +296,7 @@ jobs:
         if: failure() # Pick up events even if the job fails or is canceled.
 
   build_dockers_apitest_esignet:
-    needs: [build_apitest_esignet_local, detect_changes]
-    if: >
-      github.event_name == 'push' ||
-      (github.event_name == 'pull_request' &&
-       needs.detect_changes.outputs.automation_changed == 'true')
+    needs: build_apitest_esignet_local
     strategy:
       matrix:
         include:
@@ -366,111 +305,13 @@ jobs:
             BUILD_ARTIFACT: 'apitest-esignet-local'
             ONLY_DOCKER: true
       fail-fast: false
-    name: apitest-esignet / build-dockers
-    uses: mosip/kattu/.github/workflows/docker-build.yml@master-java21
-    with:
-      SERVICE_LOCATION: ${{ matrix.SERVICE_LOCATION }}
-      SERVICE_NAME: ${{ matrix.SERVICE_NAME }}
-      BUILD_ARTIFACT: ${{ matrix.BUILD_ARTIFACT }}
-      ONLY_DOCKER: ${{ matrix.ONLY_DOCKER }}
-    secrets:
-      DEV_NAMESPACE_DOCKER_HUB: ${{ secrets.DEV_NAMESPACE_DOCKER_HUB }}
-      ACTOR_DOCKER_HUB: ${{ secrets.ACTOR_DOCKER_HUB }}
-      RELEASE_DOCKER_HUB: ${{ secrets.RELEASE_DOCKER_HUB }}
-      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
-  
-  build-maven-uitest-esignet:
-    needs: detect_changes
-    if: >
-      github.event_name == 'push' ||
-      (github.event_name == 'pull_request' &&
-       (startsWith(github.base_ref, 'release') ||
-        needs.detect_changes.outputs.automation_changed == 'true'))
-    uses: anup-nehe/kattu/.github/workflows/maven-build-browserStack.yml@develop
-    with:
-      SERVICE_LOCATION: ./ui-test
-      BUILD_ARTIFACT: uitest-esignet
-    secrets:
-      BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
-      BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }} 
-      OSSRH_USER: ${{ secrets.OSSRH_USER }}
-      OSSRH_SECRET: ${{ secrets.OSSRH_SECRET }}
-      OSSRH_TOKEN: ${{ secrets.OSSRH_TOKEN }}
-      GPG_SECRET: ${{ secrets.GPG_SECRET }}
-      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
-
-  build-uitest-esignet-local:
-    needs: build-maven-uitest-esignet
-    runs-on: ubuntu-latest
-    env:
-      NAMESPACE: ${{ secrets.dev_namespace_docker_hub }}
-      SERVICE_NAME: uitest-esignet
-      SERVICE_LOCATION: ui-test
-      BUILD_ARTIFACT: uitest-esignet-local
-    steps:
-      - uses: actions/checkout@v3
-      - name: Set up JDK 21
-        uses: actions/setup-java@v3
-        with:
-          distribution: 'temurin'
-          java-version: '21'
-          server-id: ossrh # Value of the distributionManagement/repository/id field of the pom.xml
-          settings-path: ${{ github.workspace }} # location for the settings.xml file
-
-      - name: Cache local Maven repository
-        uses: actions/cache@v4
-        with:
-          path: ~/.m2/repository
-          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
-          restore-keys: |
-            ${{ runner.os }}-maven-
-
-      - name: Setup the settings file for ossrh server
-        run: echo "<settings> <servers>  <server>  <id>ossrh</id>    <username>${{secrets.ossrh_user}}</username> <password>${{secrets.ossrh_secret}}</password> </server> </servers> <profiles> <profile>     <id>ossrh</id> <activation> <activeByDefault>true</activeByDefault> </activation>  <properties> <gpg.executable>gpg2</gpg.executable> <gpg.passphrase>${{secrets.gpg_secret}}</gpg.passphrase> </properties> </profile> <profile> <id>allow-snapshots</id>       <activation><activeByDefault>true</activeByDefault></activation> <repositories> <repository>        <id>snapshots-repo</id> <url>https://oss.sonatype.org/content/repositories/snapshots</url> <releases><enabled>false</enabled></releases> <snapshots><enabled>true</enabled></snapshots> </repository>  <repository>         <id>releases-repo</id>  <url>https://oss.sonatype.org/service/local/staging/deploy/maven2</url>         <releases><enabled>true</enabled></releases>         <snapshots><enabled>false</enabled></snapshots> </repository> </repositories>  </profile> <profile> <id>sonar</id> <properties>  <sonar.sources>.</sonar.sources> <sonar.host.url>https://sonarcloud.io</sonar.host.url>  </properties> <activation> <activeByDefault>false</activeByDefault> </activation> </profile> </profiles> </settings>" > $GITHUB_WORKSPACE/settings.xml
-
-      - name: Build ui-test with Maven
-        run: |
-          cd ${{ env.SERVICE_LOCATION}}
-          mvn -U -B package -DskipTests -Dmaven.wagon.http.retryHandler.count=2 --file pom.xml -s $GITHUB_WORKSPACE/settings.xml
-
-      - name: Ready the springboot artifacts
-        if: ${{ !contains(github.ref, 'master') || !contains(github.ref, 'main') }}
-        run: |
-          ## FIND JARS & COPY ONLY EXECUTABLE JARs STORED UNDER TARGET DIRECTORY 
-          find ${{ env.SERVICE_LOCATION }} -path '*/target/*' -name '*.jar'  -type f -exec zip ${{ env.BUILD_ARTIFACT }}.zip {} +
-
-      - name: Upload the springboot jars
-        if: ${{ !contains(github.ref, 'master') || !contains(github.ref, 'main') }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.BUILD_ARTIFACT }}
-          path: ${{ env.BUILD_ARTIFACT }}.zip
-
-      - uses: 8398a7/action-slack@v3
-        with:
-          status: ${{ job.status }}
-          fields: repo,message,author,commit,workflow,job # selectable (default: repo,message)
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }} # required
-        if: failure() # Pick up events even if the job fails or is canceled.
-
-  build-dockers-uitest-esignet:
-    needs: build-uitest-esignet-local
-    strategy:
-      matrix:
-        include:
-          - SERVICE_LOCATION: 'ui-test'
-            SERVICE_NAME: 'uitest-esignet'
-            BUILD_ARTIFACT: 'uitest-esignet-local'
-            PLATFORMS: "linux/amd64"
-      fail-fast: false
     name: ${{ matrix.SERVICE_NAME }}
     uses: mosip/kattu/.github/workflows/docker-build.yml@master-java21
     with:
       SERVICE_LOCATION: ${{ matrix.SERVICE_LOCATION }}
       SERVICE_NAME: ${{ matrix.SERVICE_NAME }}
       BUILD_ARTIFACT: ${{ matrix.BUILD_ARTIFACT }}
-      PLATFORMS: ${{ matrix.PLATFORMS }}
+      ONLY_DOCKER: ${{ matrix.ONLY_DOCKER }}
     secrets:
       DEV_NAMESPACE_DOCKER_HUB: ${{ secrets.DEV_NAMESPACE_DOCKER_HUB }}
       ACTOR_DOCKER_HUB: ${{ secrets.ACTOR_DOCKER_HUB }}
